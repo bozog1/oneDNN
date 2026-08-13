@@ -688,11 +688,12 @@ void init_memory_args(
                 dnn_mem_t(scratchpad_md, test_engine, /* prefill = */ true));
     }
 
-    // Binary post-op.
+    // Binary, Prelu post-op.
     const auto &po = prb->attr.post_ops;
     for (int idx = 0; idx < po.len(); ++idx) {
         const auto &e = po.entry[idx];
-        if (!e.is_binary_kind()) continue;
+
+        if (e.is_binary_kind()){
 
         int po_arg = DNNL_ARG_ATTR_MULTIPLE_POST_OP(idx) | DNNL_ARG_SRC_1;
         const auto &b = e.binary;
@@ -715,6 +716,32 @@ void init_memory_args(
                 = dnn_mem_t::init_md(ndims, dims.data(), b.src1_dt, tag::abx);
         mem_map.emplace(
                 po_arg, dnn_mem_t(po_md, test_engine, /* prefill = */ true));
+        } else if (e.is_prelu_kind()) {
+            int po_arg = DNNL_ARG_ATTR_MULTIPLE_POST_OP(idx) | DNNL_ARG_WEIGHTS;
+            const auto &p = e.prelu;
+            int ndims = 2;
+            dims_t dims = prb->dst_dims;
+
+            int mask = 0; // default: none -> per-tensor (mask=0)
+            if (p.mask_input == attr_t::mask_input_t::mask) {
+                mask = p.mask;
+            } else if (e.prelu.mask_input == attr_t::mask_input_t::policy) {
+                mask = attr_t::policy2mask(DNNL_ARG_WEIGHTS, p.policy,
+                        prb->ndims, dnnl_undefined_primitive);
+            }
+
+            switch (mask) {
+                case 0: dims = {1, 1}; break;
+                case 1: dims = {dims[0], 1}; break;
+                case 2: dims = {1, dims[1]}; break;
+                default: break;
+            }
+
+            auto po_md = dnn_mem_t::init_md(ndims, dims.data(), dnnl_f32, tag::abx);
+            mem_map.emplace(
+                    po_arg, dnn_mem_t(po_md, test_engine, /* prefill = */ true));
+        }
+
     }
 
     if (!prb->attr.scales.is_def()) {
